@@ -48,6 +48,30 @@ def lambda_handler(event, context):
         if avg_cpu is not None and avg_cpu < 10:
             underutilized_resources.append(f"RDS Instance {db_id}: {avg_cpu}% avg CPU")
 
+    # --- EBS ---
+    volumes = ec2.describe_volumes(Filters=[
+        {"Name": "status", "Values": ["in-use"]}
+    ])["Volumes"]
+
+    for vol in volumes:
+        vol_id = vol["VolumeId"]
+        read_ops = get_avg_cpu_utilization(cloudwatch, "AWS/EBS", "VolumeReadOps", "VolumeId", vol_id)
+        write_ops = get_avg_cpu_utilization(cloudwatch, "AWS/EBS", "VolumeWriteOps", "VolumeId", vol_id)
+        
+        if (read_ops is not None and read_ops < 1) and (write_ops is not None and write_ops < 1):
+            underutilized_resources.append(f"EBS Volume {vol_id}: Low I/O activity (ReadOps: {read_ops}, WriteOps: {write_ops})")
+
+    # --- ELB (Classic Load Balancers) ---
+    elb = boto3.client("elb")
+    load_balancers = elb.describe_load_balancers()["LoadBalancerDescriptions"]
+
+    for lb in load_balancers:
+        lb_name = lb["LoadBalancerName"]
+        requests = get_avg_cpu_utilization(cloudwatch, "AWS/ELB", "RequestCount", "LoadBalancerName", lb_name)
+        
+        if requests is not None and requests < 1:
+            underutilized_resources.append(f"ELB {lb_name}: Low traffic ({requests} requests/hour)")
+
     # --- Notify via SNS ---
     if underutilized_resources:
         message = "Underutilized AWS Resources Detected:\n" + "\n".join(underutilized_resources)

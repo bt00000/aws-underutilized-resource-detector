@@ -29,6 +29,22 @@ def lambda_handler(event, context):
 
             datapoints = cpu["Datapoints"]
             if datapoints:
-                avg_cpu = sum(dp["Average"] for dp in datapoints / len(datapoints))
+                avg_cpu = sum(dp["Average"] for dp in datapoints) / len(datapoints)
                 if avg_cpu < 10: # If average CPU < 10%
                     underutilized_instances.append((instance_id, round(avg_cpu, 2))) # Mark it as underutilized and add to list
+    
+    if underutilized_instances:
+        message = "The following EC2 instances are underutilized:\n"
+        for instance_id, cpu in underutilized_instances:
+            message += f"- {instance_id}: {cpu}% avg CPU\n"
+        
+        sns.publish(
+            TopicArn=sns_arn,
+            Subject="Underutilized EC2 Instance Detected",
+            Message=message
+        )
+
+        return {
+            "statusCode": 200,
+            "body": "EC2 utilization check complete."
+        }

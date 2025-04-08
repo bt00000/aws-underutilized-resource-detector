@@ -36,3 +36,17 @@ resource "aws_sns_topic_subscription" "email_alert" {
   protocol  = "email"
   endpoint  = var.alert_email
 }
+
+resource "aws_lambda_function" "resource_checker" {
+  function_name = "underutilized-resource-checker"
+  handler       = "main.lambda_handler"
+  runtime       = "python3.11"
+  role          = aws_iam_role.lambda_exec_role.arn
+  filename      = "${path.module}/lambda/lambda.zip"
+
+  environment {
+    variables = {
+      SNS_TOPIC_ARN = aws_sns_topic.alert_topic.arn
+    }
+  }
+}

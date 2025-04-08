@@ -2,12 +2,14 @@ import os
 import boto3
 from datetime import datetime, timedelta
 
-# Configurable thresholds via environment variables
+# --- Thresholds ---
+# These define what counts as "underutilized" and can be overridden via Lambda environment variables
 EC2_CPU_THRESHOLD = float(os.environ.get("EC2_CPU_THRESHOLD", 10))
 RDS_CPU_THRESHOLD = float(os.environ.get("RDS_CPU_THRESHOLD", 10))
 EBS_IO_THRESHOLD = float(os.environ.get("EBS_IO_THRESHOLD", 1))
 ELB_REQUEST_THRESHOLD = float(os.environ.get("ELB_REQUEST_THRESHOLD", 1))
 
+# Helper Function: Get average CPU or I/O over last 24 hours
 def get_avg_cpu_utilization(cloudwatch, namespace, metric_name, dimension_name, identifier):
     metrics = cloudwatch.get_metric_statistics(
         Namespace=namespace,
@@ -25,6 +27,7 @@ def get_avg_cpu_utilization(cloudwatch, namespace, metric_name, dimension_name, 
         return round(avg_cpu, 2)
     return None
 
+# Tag EC2 or EBS resources as underutilized
 def tag_resource(ec2_client, resource_id):
     tags = [
         {"Key": "Underutilized", "Value": "True"},
@@ -35,6 +38,7 @@ def tag_resource(ec2_client, resource_id):
     print(f"  - Tags: {tags}\n")
     ec2_client.create_tags(Resources=[resource_id], Tags=tags)
 
+# Get yesterday's AWS cost using Cost Explorer
 def get_cost_estimate(ce_client):
     start = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
     end = datetime.utcnow().strftime('%Y-%m-%d')
@@ -46,6 +50,7 @@ def get_cost_estimate(ce_client):
     amount = result['ResultsByTime'][0]['Total']['UnblendedCost']['Amount']
     return round(float(amount), 2)
 
+# Main Lambda Handler
 def lambda_handler(event, context):
     sns_arn = os.environ.get("SNS_TOPIC_ARN")
     cloudwatch = boto3.client("cloudwatch")
@@ -58,7 +63,8 @@ def lambda_handler(event, context):
     underutilized_resources = []
     utilized_resources = []
 
-    # --- EC2 ---
+    # --- EC2 Check ---
+    # Loop through running instances and get average CPU utilization
     ec2_response = ec2.describe_instances(Filters=[
         {"Name": "instance-state-name", "Values": ["running"]}
     ])
@@ -74,7 +80,8 @@ def lambda_handler(event, context):
                 else:
                     utilized_resources.append(f"EC2 Instance {instance_id}: {avg_cpu}% avg CPU (OK)")
 
-    # --- RDS ---
+    # --- RDS Check---
+    # Loop through all RDS instances and check CPU utilization
     rds_response = rds.describe_db_instances()
     for db in rds_response["DBInstances"]:
         db_id = db["DBInstanceIdentifier"]
@@ -85,7 +92,8 @@ def lambda_handler(event, context):
             else:
                 utilized_resources.append(f"RDS Instance {db_id}: {avg_cpu}% avg CPU (OK)")
 
-    # --- EBS ---
+    # --- EBS Check ---
+    # Evaluate I/O for in-use volumes and check if under threshold
     volumes = ec2.describe_volumes(Filters=[
         {"Name": "status", "Values": ["in-use"]}
     ])["Volumes"]
@@ -102,7 +110,8 @@ def lambda_handler(event, context):
             else:
                 utilized_resources.append(f"EBS Volume {vol_id}: ReadOps: {read_ops}, WriteOps: {write_ops} (OK)")
 
-    # --- ELBv2 ---
+    # --- ELBv2 Check ---
+    # Check application load balancer traffic levels via RequestCount metric
     target_groups = elbv2.describe_target_groups()["TargetGroups"]
 
     for tg in target_groups:
@@ -115,7 +124,7 @@ def lambda_handler(event, context):
             metric_name="RequestCount",
             dimension_name="LoadBalancer",
             identifier=lb_arn_suffix
-        )
+        ) 
 
         if requests is not None:
             if requests < ELB_REQUEST_THRESHOLD:
@@ -123,10 +132,10 @@ def lambda_handler(event, context):
             else:
                 utilized_resources.append(f"ELBv2 {tg_name}: {requests} requests/hour (OK)")
 
-    # --- Cost Estimation ---
+    # Cost Estimation 
     estimated_cost = get_cost_estimate(ce)
 
-    # --- Compose Message ---
+    # Compose Alert Message
     message_parts = []
 
     if underutilized_resources:
@@ -141,6 +150,7 @@ def lambda_handler(event, context):
     message_parts.append(f"\nEstimated Daily AWS Cost: ${estimated_cost}")
     message = "\n\n".join(message_parts)
 
+    # Send SNS Notification
     print("Sending the following SNS alert:\n")
     print(message)
     sns.publish(

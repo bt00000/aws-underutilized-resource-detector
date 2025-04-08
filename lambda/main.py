@@ -2,6 +2,12 @@ import os
 import boto3
 from datetime import datetime, timedelta
 
+# Configurable thresholds via environment variables
+EC2_CPU_THRESHOLD = float(os.environ.get("EC2_CPU_THRESHOLD", 10))
+RDS_CPU_THRESHOLD = float(os.environ.get("RDS_CPU_THRESHOLD", 10))
+EBS_IO_THRESHOLD = float(os.environ.get("EBS_IO_THRESHOLD", 1))
+ELB_REQUEST_THRESHOLD = float(os.environ.get("ELB_REQUEST_THRESHOLD", 1))
+
 def get_avg_cpu_utilization(cloudwatch, namespace, metric_name, dimension_name, identifier):
     metrics = cloudwatch.get_metric_statistics(
         Namespace=namespace,
@@ -24,7 +30,19 @@ def tag_resource(ec2_client, resource_id):
         {"Key": "Underutilized", "Value": "True"},
         {"Key": "FlaggedAt", "Value": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
     ]
+    print(f"Tagging resource {resource_id} as underutilized")
     ec2_client.create_tags(Resources=[resource_id], Tags=tags)
+
+def get_cost_estimate(ce_client):
+    start = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
+    end = datetime.utcnow().strftime('%Y-%m-%d')
+    result = ce_client.get_cost_and_usage(
+        TimePeriod={"Start": start, "End": end},
+        Granularity="DAILY",
+        Metrics=["UnblendedCost"]
+    )
+    amount = result['ResultsByTime'][0]['Total']['UnblendedCost']['Amount']
+    return round(float(amount), 2)
 
 def lambda_handler(event, context):
     sns_arn = os.environ.get("SNS_TOPIC_ARN")
@@ -47,7 +65,7 @@ def lambda_handler(event, context):
         for instance in reservation["Instances"]:
             instance_id = instance["InstanceId"]
             avg_cpu = get_avg_cpu_utilization(cloudwatch, "AWS/EC2", "CPUUtilization", "InstanceId", instance_id)
-            if avg_cpu is not None and avg_cpu < 10:
+            if avg_cpu is not None and avg_cpu < EC2_CPU_THRESHOLD:
                 underutilized_resources.append(f"EC2 Instance {instance_id}: {avg_cpu}% avg CPU")
                 tag_resource(ec2, instance_id)
 
@@ -56,7 +74,7 @@ def lambda_handler(event, context):
     for db in rds_response["DBInstances"]:
         db_id = db["DBInstanceIdentifier"]
         avg_cpu = get_avg_cpu_utilization(cloudwatch, "AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", db_id)
-        if avg_cpu is not None and avg_cpu < 10:
+        if avg_cpu is not None and avg_cpu < RDS_CPU_THRESHOLD:
             underutilized_resources.append(f"RDS Instance {db_id}: {avg_cpu}% avg CPU")
 
     # --- EBS ---
@@ -69,7 +87,7 @@ def lambda_handler(event, context):
         read_ops = get_avg_cpu_utilization(cloudwatch, "AWS/EBS", "VolumeReadOps", "VolumeId", vol_id)
         write_ops = get_avg_cpu_utilization(cloudwatch, "AWS/EBS", "VolumeWriteOps", "VolumeId", vol_id)
         
-        if (read_ops is not None and read_ops < 1) and (write_ops is not None and write_ops < 1):
+        if (read_ops is not None and read_ops < EBS_IO_THRESHOLD) and (write_ops is not None and write_ops < EBS_IO_THRESHOLD):
             underutilized_resources.append(f"EBS Volume {vol_id}: Low I/O activity (ReadOps: {read_ops}, WriteOps: {write_ops})")
             tag_resource(ec2, vol_id)
 
@@ -89,12 +107,16 @@ def lambda_handler(event, context):
             identifier=lb_arn_suffix
         )
 
-        if requests is not None and requests < 1:
+        if requests is not None and requests < ELB_REQUEST_THRESHOLD:
             underutilized_resources.append(f"ELBv2 {tg_name}: Low traffic ({requests} requests/hour)")
+
+    # Cost Tracking
+    estimated_cost = get_cost_estimate(ce)
+    cost_summary = f"\nEstimated Daily AWS Cost: ${estimated_cost}"
 
     # --- Notify via SNS ---
     if underutilized_resources:
-        message = "Underutilized AWS Resources Detected:\n" + "\n".join(underutilized_resources)
+        message = "Underutilized AWS Resources Detected:\n" + "\n".join(underutilized_resources) + cost_summary
 
         sns.publish(
             TopicArn=sns_arn,

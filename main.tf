@@ -17,6 +17,21 @@ resource "aws_iam_role" "lambda_exec_role" {
   })
 }
 
+resource "aws_iam_policy" "sns_publish_policy" {
+  name        = "sns-publish-policy"
+  description = "Allows Lambda to publish to SNS"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = "sns:Publish",
+        Resource = aws_sns_topic.alert_topic.arn
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role_policy_attachment" "attach_sns_publish_policy" {
   role       = aws_iam_role.lambda_exec_role.name
   policy_arn = aws_iam_policy.sns_publish_policy.arn

@@ -26,3 +26,13 @@ resource "aws_iam_role_policy_attachment" "lambda_ec2_cloudwatch" {
   role       = aws_iam_role.lambda_exec_role.name
   policy_arn = "arn:aws:iam::aws:policy/CloudWatchReadOnlyAccess"
 }
+
+resource "aws_sns_topic" "alert_topic" {
+  name = "underutilized-resource-alerts"
+}
+
+resource "aws_sns_topic_subscription" "email_alert" {
+  topic_arn = aws_sns_topic.alert_topic.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
+}

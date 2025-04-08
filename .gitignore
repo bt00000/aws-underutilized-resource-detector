@@ -2,6 +2,7 @@
 *.tfstate
 *.tfstate.backup
 .terraform.lock.hcl
+terraform.tfvars
 
 # Ignore local .terraform directory (where plugins and modules get downloaded)
 .terraform/

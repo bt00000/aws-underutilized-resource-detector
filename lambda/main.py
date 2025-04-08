@@ -19,12 +19,22 @@ def get_avg_cpu_utilization(cloudwatch, namespace, metric_name, dimension_name, 
         return round(avg_cpu, 2)
     return None
 
+def tag_resource(ec2_client, resource_id):
+    tags = [
+        {"Key": "Underutilized", "Value": "True"},
+        {"Key": "FlaggedAt", "Value": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
+    ]
+    ec2_client.create_tags(Resources=[resource_id], Tags=tags)
+
 def lambda_handler(event, context):
     sns_arn = os.environ.get("SNS_TOPIC_ARN")
     cloudwatch = boto3.client("cloudwatch")
     ec2 = boto3.client("ec2")
     rds = boto3.client("rds")
+    elbv2 = boto3.client("elbv2")
     sns = boto3.client("sns")
+    ce = boto3.client("ce")  # Cost Explorer for future enhancements
+
 
     underutilized_resources = []
 
@@ -39,6 +49,7 @@ def lambda_handler(event, context):
             avg_cpu = get_avg_cpu_utilization(cloudwatch, "AWS/EC2", "CPUUtilization", "InstanceId", instance_id)
             if avg_cpu is not None and avg_cpu < 10:
                 underutilized_resources.append(f"EC2 Instance {instance_id}: {avg_cpu}% avg CPU")
+                tag_resource(ec2, instance_id)
 
     # --- RDS ---
     rds_response = rds.describe_db_instances()
@@ -60,13 +71,12 @@ def lambda_handler(event, context):
         
         if (read_ops is not None and read_ops < 1) and (write_ops is not None and write_ops < 1):
             underutilized_resources.append(f"EBS Volume {vol_id}: Low I/O activity (ReadOps: {read_ops}, WriteOps: {write_ops})")
+            tag_resource(ec2, vol_id)
 
     # --- ELBv2 (Application & Network Load Balancers) ---
-    elbv2 = boto3.client("elbv2")
     target_groups = elbv2.describe_target_groups()["TargetGroups"]
 
     for tg in target_groups:
-        tg_arn = tg["TargetGroupArn"]
         tg_name = tg["TargetGroupName"]
         lb_arn_suffix = tg["LoadBalancerArns"][0].split('/')[-1]  # For CloudWatch dimension
 

@@ -66,6 +66,8 @@ resource "aws_lambda_function" "resource_checker" {
 
   source_code_hash = filebase64sha256("${path.module}/lambda/lambda.zip")
 
+  timeout = 60
+
   environment {
     variables = {
       SNS_TOPIC_ARN = aws_sns_topic.alert_topic.arn
@@ -90,4 +92,13 @@ resource "aws_lambda_permission" "allow_cloudwatch" {
   function_name = aws_lambda_function.resource_checker.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.daily_trigger.arn
+}
+
+resource "aws_instance" "test_instance" {
+  ami           = "ami-0c02fb55956c7d316" # Amazon Linux 2
+  instance_type = "t2.micro"              
+
+  tags = {
+    Name = "TestInstance"
+  }
 }

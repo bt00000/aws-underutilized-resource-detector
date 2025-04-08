@@ -47,6 +47,31 @@ resource "aws_iam_role_policy_attachment" "lambda_ec2_cloudwatch" {
   policy_arn = "arn:aws:iam::aws:policy/CloudWatchReadOnlyAccess"
 }
 
+resource "aws_iam_policy" "ec2_read_policy" {
+  name        = "ec2-read-policy"
+  description = "Allows Lambda to read EC2 instance info"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "ec2:DescribeInstances",
+          "ec2:DescribeRegions",
+          "ec2:DescribeTags"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_ec2_read_policy" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = aws_iam_policy.ec2_read_policy.arn
+}
+
+
 resource "aws_sns_topic" "alert_topic" {
   name = "underutilized-resource-alerts"
 }

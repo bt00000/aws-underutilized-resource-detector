@@ -64,6 +64,8 @@ resource "aws_lambda_function" "resource_checker" {
   role          = aws_iam_role.lambda_exec_role.arn
   filename      = "${path.module}/lambda/lambda.zip"
 
+  source_code_hash = filebase64sha256("${path.module}/lambda/lambda.zip")
+
   environment {
     variables = {
       SNS_TOPIC_ARN = aws_sns_topic.alert_topic.arn

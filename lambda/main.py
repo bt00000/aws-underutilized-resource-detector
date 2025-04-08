@@ -53,10 +53,10 @@ def lambda_handler(event, context):
     rds = boto3.client("rds")
     elbv2 = boto3.client("elbv2")
     sns = boto3.client("sns")
-    ce = boto3.client("ce")  # Cost Explorer for future enhancements
-
+    ce = boto3.client("ce")
 
     underutilized_resources = []
+    utilized_resources = []
 
     # --- EC2 ---
     ec2_response = ec2.describe_instances(Filters=[
@@ -67,17 +67,23 @@ def lambda_handler(event, context):
         for instance in reservation["Instances"]:
             instance_id = instance["InstanceId"]
             avg_cpu = get_avg_cpu_utilization(cloudwatch, "AWS/EC2", "CPUUtilization", "InstanceId", instance_id)
-            if avg_cpu is not None and avg_cpu < EC2_CPU_THRESHOLD:
-                underutilized_resources.append(f"EC2 Instance {instance_id}: {avg_cpu}% avg CPU")
-                tag_resource(ec2, instance_id)
+            if avg_cpu is not None:
+                if avg_cpu < EC2_CPU_THRESHOLD:
+                    underutilized_resources.append(f"EC2 Instance {instance_id}: {avg_cpu}% avg CPU")
+                    tag_resource(ec2, instance_id)
+                else:
+                    utilized_resources.append(f"EC2 Instance {instance_id}: {avg_cpu}% avg CPU (OK)")
 
     # --- RDS ---
     rds_response = rds.describe_db_instances()
     for db in rds_response["DBInstances"]:
         db_id = db["DBInstanceIdentifier"]
         avg_cpu = get_avg_cpu_utilization(cloudwatch, "AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", db_id)
-        if avg_cpu is not None and avg_cpu < RDS_CPU_THRESHOLD:
-            underutilized_resources.append(f"RDS Instance {db_id}: {avg_cpu}% avg CPU")
+        if avg_cpu is not None:
+            if avg_cpu < RDS_CPU_THRESHOLD:
+                underutilized_resources.append(f"RDS Instance {db_id}: {avg_cpu}% avg CPU")
+            else:
+                utilized_resources.append(f"RDS Instance {db_id}: {avg_cpu}% avg CPU (OK)")
 
     # --- EBS ---
     volumes = ec2.describe_volumes(Filters=[
@@ -88,19 +94,21 @@ def lambda_handler(event, context):
         vol_id = vol["VolumeId"]
         read_ops = get_avg_cpu_utilization(cloudwatch, "AWS/EBS", "VolumeReadOps", "VolumeId", vol_id)
         write_ops = get_avg_cpu_utilization(cloudwatch, "AWS/EBS", "VolumeWriteOps", "VolumeId", vol_id)
-        
-        if (read_ops is not None and read_ops < EBS_IO_THRESHOLD) and (write_ops is not None and write_ops < EBS_IO_THRESHOLD):
-            underutilized_resources.append(f"EBS Volume {vol_id}: Low I/O activity (ReadOps: {read_ops}, WriteOps: {write_ops})")
-            tag_resource(ec2, vol_id)
 
-    # --- ELBv2 (Application & Network Load Balancers) ---
+        if read_ops is not None and write_ops is not None:
+            if read_ops < EBS_IO_THRESHOLD and write_ops < EBS_IO_THRESHOLD:
+                underutilized_resources.append(f"EBS Volume {vol_id}: Low I/O activity (ReadOps: {read_ops}, WriteOps: {write_ops})")
+                tag_resource(ec2, vol_id)
+            else:
+                utilized_resources.append(f"EBS Volume {vol_id}: ReadOps: {read_ops}, WriteOps: {write_ops} (OK)")
+
+    # --- ELBv2 ---
     target_groups = elbv2.describe_target_groups()["TargetGroups"]
 
     for tg in target_groups:
         tg_name = tg["TargetGroupName"]
-        lb_arn_suffix = tg["LoadBalancerArns"][0].split('/')[-1]  # For CloudWatch dimension
+        lb_arn_suffix = tg["LoadBalancerArns"][0].split('/')[-1]
 
-        # For ALB/NLB RequestCount
         requests = get_avg_cpu_utilization(
             cloudwatch,
             namespace="AWS/ApplicationELB",
@@ -109,29 +117,37 @@ def lambda_handler(event, context):
             identifier=lb_arn_suffix
         )
 
-        if requests is not None and requests < ELB_REQUEST_THRESHOLD:
-            underutilized_resources.append(f"ELBv2 {tg_name}: Low traffic ({requests} requests/hour)")
+        if requests is not None:
+            if requests < ELB_REQUEST_THRESHOLD:
+                underutilized_resources.append(f"ELBv2 {tg_name}: Low traffic ({requests} requests/hour)")
+            else:
+                utilized_resources.append(f"ELBv2 {tg_name}: {requests} requests/hour (OK)")
 
-    # Cost Tracking
+    # --- Cost Estimation ---
     estimated_cost = get_cost_estimate(ce)
-    cost_summary = f"\nEstimated Daily AWS Cost: ${estimated_cost}"
 
-    # --- Notify via SNS ---
+    # --- Compose Message ---
+    message_parts = []
+
     if underutilized_resources:
-        header = "UNDERUTILIZED AWS RESOURCES DETECTED\n"
-        body = "\n".join(f"• {r}" for r in underutilized_resources)
-        cost_summary = f"\n\nEstimated Daily AWS Cost: ${estimated_cost}\n"
-        footer = "\nConsider rightsizing or terminating these resources."
+        message_parts.append("UNDERUTILIZED AWS RESOURCES DETECTED")
+        message_parts.append("\n".join(f"• {r}" for r in underutilized_resources))
+        message_parts.append("Consider rightsizing or terminating these resources.\n")
 
-        message = header + body + cost_summary + footer
+    if utilized_resources:
+        message_parts.append("UTILIZED RESOURCES (HEALTHY)")
+        message_parts.append("\n".join(f"• {r}" for r in utilized_resources))
 
-        print("Sending the following SNS alert:\n")
-        print(message)
-        sns.publish(
-            TopicArn=sns_arn,
-            Subject="AWS Underutilized Resource Alert",
-            Message=message
-        )
+    message_parts.append(f"\nEstimated Daily AWS Cost: ${estimated_cost}")
+    message = "\n\n".join(message_parts)
+
+    print("Sending the following SNS alert:\n")
+    print(message)
+    sns.publish(
+        TopicArn=sns_arn,
+        Subject="AWS Underutilized Resource Alert",
+        Message=message
+    )
 
     return {
         "statusCode": 200,

@@ -58,7 +58,9 @@ resource "aws_iam_policy" "ec2_read_policy" {
         Action = [
           "ec2:DescribeInstances",
           "ec2:DescribeRegions",
-          "ec2:DescribeTags"
+          "ec2:DescribeTags",
+          "ec2:DescribeVolumes",       
+          "ec2:DescribeVolumeStatus"
         ],
         Resource = "*"
       }
@@ -71,6 +73,95 @@ resource "aws_iam_role_policy_attachment" "attach_ec2_read_policy" {
   policy_arn = aws_iam_policy.ec2_read_policy.arn
 }
 
+resource "aws_iam_policy" "ec2_tag_policy" {
+  name        = "ec2-tag-policy"
+  description = "Allows Lambda to tag EC2 instances and volumes"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "ec2:CreateTags"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_ec2_tag_policy" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = aws_iam_policy.ec2_tag_policy.arn
+}
+
+resource "aws_iam_policy" "rds_read_policy" {
+  name        = "rds-read-policy"
+  description = "Allows Lambda to read RDS instance info"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "rds:DescribeDBInstances"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_rds_read_policy" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = aws_iam_policy.rds_read_policy.arn
+}
+
+resource "aws_iam_policy" "elbv2_read_policy" {
+  name        = "elbv2-read-policy"
+  description = "Allows Lambda to read ELBv2 info"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "elasticloadbalancing:DescribeLoadBalancers",
+          "elasticloadbalancing:DescribeTargetGroups",
+          "elasticloadbalancing:DescribeTargetHealth"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_elbv2_read_policy" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = aws_iam_policy.elbv2_read_policy.arn
+}
+
+resource "aws_iam_policy" "cost_explorer_policy" {
+  name        = "cost-explorer-policy"
+  description = "Allows Lambda to fetch AWS cost data"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "ce:GetCostAndUsage"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_cost_explorer_policy" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = aws_iam_policy.cost_explorer_policy.arn
+}
 
 resource "aws_sns_topic" "alert_topic" {
   name = "underutilized-resource-alerts"

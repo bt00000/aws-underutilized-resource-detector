@@ -119,11 +119,115 @@ resource "aws_lambda_permission" "allow_cloudwatch" {
   source_arn    = aws_cloudwatch_event_rule.daily_trigger.arn
 }
 
+// Test instances
 resource "aws_instance" "test_instance" {
   ami           = "ami-0c02fb55956c7d316" # Amazon Linux 2
-  instance_type = "t2.micro"              
+  instance_type = "t2.micro"
 
   tags = {
     Name = "TestInstance"
   }
 }
+
+// RDS test instance
+resource "aws_db_instance" "test_rds" {
+  allocated_storage   = 20
+  engine              = "mysql"
+  engine_version      = "8.0"
+  instance_class      = "db.t3.micro"
+  db_name                = "testdb"
+  username            = "admin"
+  password            = "password123"
+  skip_final_snapshot = true
+  publicly_accessible = true
+
+  tags = {
+    Name = "TestRDS"
+  }
+}
+
+// EBS volume + attachment to EC2
+resource "aws_ebs_volume" "test_volume" {
+  availability_zone = aws_instance.test_instance.availability_zone
+  size              = 1
+
+  tags = {
+    Name = "TestVolume"
+  }
+}
+
+resource "aws_volume_attachment" "test_attachment" {
+  device_name = "/dev/sdh"
+  volume_id   = aws_ebs_volume.test_volume.id
+  instance_id = aws_instance.test_instance.id
+}
+
+// Networking setup for ALB (uses default VPC)
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+// Security group to allow HTTP for ALB + EC2
+resource "aws_security_group" "alb_sg" {
+  name        = "alb-sg"
+  description = "Allow HTTP"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+// ELBv2 Application Load Balancer
+resource "aws_lb" "test_alb" {
+  name               = "test-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = data.aws_subnets.default.ids
+}
+
+// Target Group for ALB
+resource "aws_lb_target_group" "test_tg" {
+  name     = "test-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = data.aws_vpc.default.id
+}
+
+// Listener
+resource "aws_lb_listener" "test_listener" {
+  load_balancer_arn = aws_lb.test_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.test_tg.arn
+  }
+}
+
+// Register EC2 instance to target group
+resource "aws_lb_target_group_attachment" "test_tg_attachment" {
+  target_group_arn = aws_lb_target_group.test_tg.arn
+  target_id        = aws_instance.test_instance.id
+  port             = 80
+}
+

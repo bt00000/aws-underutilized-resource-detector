@@ -30,7 +30,9 @@ def tag_resource(ec2_client, resource_id):
         {"Key": "Underutilized", "Value": "True"},
         {"Key": "FlaggedAt", "Value": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
     ]
-    print(f"Tagging resource {resource_id} as underutilized")
+    print("\nTagging resource as underutilized:")
+    print(f"  - Resource ID: {resource_id}")
+    print(f"  - Tags: {tags}\n")
     ec2_client.create_tags(Resources=[resource_id], Tags=tags)
 
 def get_cost_estimate(ce_client):
@@ -116,8 +118,15 @@ def lambda_handler(event, context):
 
     # --- Notify via SNS ---
     if underutilized_resources:
-        message = "Underutilized AWS Resources Detected:\n" + "\n".join(underutilized_resources) + cost_summary
+        header = "UNDERUTILIZED AWS RESOURCES DETECTED\n"
+        body = "\n".join(f"• {r}" for r in underutilized_resources)
+        cost_summary = f"\n\nEstimated Daily AWS Cost: ${estimated_cost}\n"
+        footer = "\nConsider rightsizing or terminating these resources."
 
+        message = header + body + cost_summary + footer
+
+        print("Sending the following SNS alert:\n")
+        print(message)
         sns.publish(
             TopicArn=sns_arn,
             Subject="AWS Underutilized Resource Alert",

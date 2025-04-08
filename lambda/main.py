@@ -61,16 +61,26 @@ def lambda_handler(event, context):
         if (read_ops is not None and read_ops < 1) and (write_ops is not None and write_ops < 1):
             underutilized_resources.append(f"EBS Volume {vol_id}: Low I/O activity (ReadOps: {read_ops}, WriteOps: {write_ops})")
 
-    # --- ELB (Classic Load Balancers) ---
-    elb = boto3.client("elb")
-    load_balancers = elb.describe_load_balancers()["LoadBalancerDescriptions"]
+    # --- ELBv2 (Application & Network Load Balancers) ---
+    elbv2 = boto3.client("elbv2")
+    target_groups = elbv2.describe_target_groups()["TargetGroups"]
 
-    for lb in load_balancers:
-        lb_name = lb["LoadBalancerName"]
-        requests = get_avg_cpu_utilization(cloudwatch, "AWS/ELB", "RequestCount", "LoadBalancerName", lb_name)
-        
+    for tg in target_groups:
+        tg_arn = tg["TargetGroupArn"]
+        tg_name = tg["TargetGroupName"]
+        lb_arn_suffix = tg["LoadBalancerArns"][0].split('/')[-1]  # For CloudWatch dimension
+
+        # For ALB/NLB RequestCount
+        requests = get_avg_cpu_utilization(
+            cloudwatch,
+            namespace="AWS/ApplicationELB",
+            metric_name="RequestCount",
+            dimension_name="LoadBalancer",
+            identifier=lb_arn_suffix
+        )
+
         if requests is not None and requests < 1:
-            underutilized_resources.append(f"ELB {lb_name}: Low traffic ({requests} requests/hour)")
+            underutilized_resources.append(f"ELBv2 {tg_name}: Low traffic ({requests} requests/hour)")
 
     # --- Notify via SNS ---
     if underutilized_resources:
